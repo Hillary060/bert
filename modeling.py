@@ -869,6 +869,7 @@ def transformer_model(input_tensor,
             with tf.variable_scope("attention"):
                 attention_heads = []
                 with tf.variable_scope("self"):
+                    """[1] 输入张量进行 self-attention 操作"""
                     attention_head = attention_layer(
                         from_tensor=layer_input,
                         to_tensor=layer_input,
@@ -891,6 +892,7 @@ def transformer_model(input_tensor,
                     # them to the self-attention head before the projection.
                     attention_output = tf.concat(attention_heads, axis=-1)
 
+                """ [2] self-attention输出结果，跟残差相加，进行一次layer_norm规范化"""
                 # Run a linear projection of `hidden_size` then add a residual
                 # with `layer_input`.
                 with tf.variable_scope("output"):
@@ -899,7 +901,7 @@ def transformer_model(input_tensor,
                         hidden_size,
                         kernel_initializer=create_initializer(initializer_range))
                     attention_output = dropout(attention_output, hidden_dropout_prob)
-                    attention_output = layer_norm(attention_output + layer_input)
+                    attention_output = layer_norm(attention_output + layer_input)  # attention_output输出结果与残差layer_input相加
 
             # The activation is only applied to the "intermediate" hidden layer.
             with tf.variable_scope("intermediate"):
@@ -911,6 +913,7 @@ def transformer_model(input_tensor,
 
             # Down-project back to `hidden_size` then add the residual.
             with tf.variable_scope("output"):
+                """ [3] attention_output经过一次全连接层，输出结果再跟残差相加，再进行一次layer_norm规范化，得到一层encoder的输出"""
                 layer_output = tf.layers.dense(
                     intermediate_output,
                     hidden_size,
@@ -918,7 +921,7 @@ def transformer_model(input_tensor,
                 layer_output = dropout(layer_output, hidden_dropout_prob)
                 layer_output = layer_norm(layer_output + attention_output)
                 prev_output = layer_output
-                all_layer_outputs.append(layer_output)
+                all_layer_outputs.append(layer_output)  # 一层encoder的输出
 
     if do_return_all_layers:
         final_outputs = []
