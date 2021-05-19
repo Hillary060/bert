@@ -186,8 +186,9 @@ class BertModel(object):
 
         """ 2 确定网络结构 """
         with tf.variable_scope(scope, default_name="bert"):
+            """ [1] embedding层：三个embedding直接相加，再ln+dropout, 作为encoder层的原始输入 """
             with tf.variable_scope("embeddings"):
-                """（1）word ids embedding """
+                """（1）word ids embedding"""
                 (self.embedding_output, self.embedding_table) = embedding_lookup(
                     input_ids=input_ids,
                     vocab_size=config.vocab_size,
@@ -212,11 +213,11 @@ class BertModel(object):
 
                     dropout_prob=config.hidden_dropout_prob
                 )
-
+            """ [2] encoder层： """
             with tf.variable_scope("encoder"):
                 # 将input_ids 和 input_mask 从2D 转化成 3D mask，用于 attention scores
                 # shape:从 [batch_size, seq_length] 转成 [batch_size, seq_length, seq_length]
-                """ 生成3维 attention mask  [batch_size, seq_length, seq_length] """
+                """（1）输入张量进行attention： 生成3维 attention mask  [batch_size, seq_length, seq_length] """
                 attention_mask = create_attention_mask_from_input_mask(
                     input_ids, input_mask)
 
@@ -409,6 +410,8 @@ def create_initializer(initializer_range=0.02):
     return tf.truncated_normal_initializer(stddev=initializer_range)
 
 
+# 获取词向量
+# 词表比较小:可以使用one-hot vector和embedding_table乘积方式;  默认tf.gather()获取词向量
 def embedding_lookup(input_ids,
                      vocab_size,
                      embedding_size=128,
@@ -430,11 +433,9 @@ def embedding_lookup(input_ids,
     Returns:
       float Tensor of shape [batch_size, seq_length, embedding_size].
     """
-    # This function assumes that the input is of shape [batch_size, seq_length,
-    # num_inputs].
-    #
-    # If the input is a 2D tensor of shape [batch_size, seq_length], we
-    # reshape to [batch_size, seq_length, 1].
+    # This function assumes that the input is of shape [batch_size, seq_length, num_inputs].
+
+    # If the input is a 2D tensor of shape [batch_size, seq_length], we reshape to [batch_size, seq_length, 1].
     if input_ids.shape.ndims == 2:
         input_ids = tf.expand_dims(input_ids, axis=[-1])
 
@@ -445,20 +446,22 @@ def embedding_lookup(input_ids,
 
     flat_input_ids = tf.reshape(input_ids, [-1])
     if use_one_hot_embeddings:
+        # 使用one-hot的方法获取词向量，one-hot乘词表,词表较小时，这种方式更快
         one_hot_input_ids = tf.one_hot(flat_input_ids, depth=vocab_size)
         output = tf.matmul(one_hot_input_ids, embedding_table)
     else:
+        """使用tf.gather根据input_id查询词向量"""
         output = tf.gather(embedding_table, flat_input_ids)
 
-    input_shape = get_shape_list(input_ids)
-
+    input_shape = get_shape_list(input_ids)  # [batch_size, seq_length, 1]
     output = tf.reshape(output,
-                        input_shape[0:-1] + [input_shape[-1] * embedding_size])
+                        input_shape[0:-1] + [input_shape[-1] * embedding_size])  # [batch_size, seq_length, embedding_size]
+
     return (output, embedding_table)
 
 
-# 在word id的emb结果基础上
-# （1）增加type emb 和 pos emb
+# 对词向量的后续处理：
+# （1）获取到各个向量（type emb、pos emb）后，直接简单相加
 # （2）然后对output进行layer normalize并dropout后输出。
 def embedding_postprocessor(input_tensor,
                             use_token_type=False,
@@ -497,12 +500,13 @@ def embedding_postprocessor(input_tensor,
     Raises:
       ValueError: One of the tensor shapes or input values is invalid.
     """
+    # 获取input张量维度、batch_size、seq_length、width(词向量的维度 embedding_size)
     input_shape = get_shape_list(input_tensor, expected_rank=3)
     batch_size = input_shape[0]
     seq_length = input_shape[1]
     width = input_shape[2]
 
-    output = input_tensor
+    output = input_tensor  # 初始化输出张量
 
     if use_token_type:
         if token_type_ids is None:
@@ -519,14 +523,14 @@ def embedding_postprocessor(input_tensor,
         token_type_embeddings = tf.matmul(one_hot_ids, token_type_table)
         token_type_embeddings = tf.reshape(token_type_embeddings,
                                            [batch_size, seq_length, width])
-        output += token_type_embeddings
+        output += token_type_embeddings  # 直接加
 
     if use_position_embeddings:
         assert_op = tf.assert_less_equal(seq_length, max_position_embeddings)
         with tf.control_dependencies([assert_op]):
             full_position_embeddings = tf.get_variable(
                 name=position_embedding_name,
-                shape=[max_position_embeddings, width],
+                shape=[max_position_embeddings, width],  # 建立0到max_position_embeddings-1位置上的向量
                 initializer=create_initializer(initializer_range))
             # Since the position embedding table is a learned variable, we create it
             # using a (long) sequence length `max_position_embeddings`. The actual
@@ -538,7 +542,7 @@ def embedding_postprocessor(input_tensor,
             # sequence has positions [0, 1, 2, ... seq_length-1], so we can just
             # perform a slice.
             position_embeddings = tf.slice(full_position_embeddings, [0, 0],
-                                           [seq_length, -1])
+                                           [seq_length, -1])  # 使用切片的方式，保证后续输入序列不会比位置向量词表更长
             num_dims = len(output.shape.as_list())
 
             # Only the last two dimensions are relevant (`seq_length` and `width`), so
@@ -547,10 +551,10 @@ def embedding_postprocessor(input_tensor,
             position_broadcast_shape = []
             for _ in range(num_dims - 2):
                 position_broadcast_shape.append(1)
-            position_broadcast_shape.extend([seq_length, width])
-            position_embeddings = tf.reshape(position_embeddings,
+            position_broadcast_shape.extend([seq_length, width])  # 只有最后两维是相关的(`seq_length` and `width`), shape [1, seq_length, width]
+            position_embeddings = tf.reshape(position_embeddings,   # [1, seq_length, width]
                                              position_broadcast_shape)
-            output += position_embeddings
+            output += position_embeddings  # 直接加
 
     output = layer_norm_and_dropout(output, dropout_prob)
     return output
