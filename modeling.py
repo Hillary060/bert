@@ -168,6 +168,7 @@ class BertModel(object):
         """
 
         config = copy.deepcopy(config)
+        # 不是训练过程，dropout清零
         if not is_training:
             config.hidden_dropout_prob = 0.0
             config.attention_probs_dropout_prob = 0.0
@@ -176,11 +177,13 @@ class BertModel(object):
         batch_size = input_shape[0]
         seq_length = input_shape[1]
 
-        if input_mask is None:  # position emb
-            # 默认input_mask全是1
+        # 输入的input_mask为None，构造【值全为1的input_mask】，表示输入都是”真实”的输入，没有padding的内容
+        if input_mask is None:  # 用于position emb
+            # 默认input_mask值全是1
             input_mask = tf.ones(shape=[batch_size, seq_length], dtype=tf.int32)
 
-        if token_type_ids is None:  # segment emb
+        # token_type_ids为None，构造【值全为0的tensor】，表示所有Token都属于第一个句子
+        if token_type_ids is None:  # 用于segment emb
             # 默认token_type_ids全是0
             token_type_ids = tf.zeros(shape=[batch_size, seq_length], dtype=tf.int32)
 
@@ -197,7 +200,7 @@ class BertModel(object):
                     word_embedding_name="word_embeddings",
                     use_one_hot_embeddings=use_one_hot_embeddings)
 
-                """（2）在word id emb 上增加 type emb 和 pos emb，然后对output进行layer normalize并dropout后输出。"""
+                """（2）在word id emb 上增加 type emb 和 pos emb，然后对三个emb的加和 进行layer normalize并dropout后输出。"""
                 self.embedding_output = embedding_postprocessor(
                     input_tensor=self.embedding_output,
                     # type embedding
@@ -213,7 +216,7 @@ class BertModel(object):
 
                     dropout_prob=config.hidden_dropout_prob
                 )
-            """ [2] encoder层：将embedding输入到transformer的encoder """
+            """ [2] encoder层：将embedding输入到transformer model的encoder """
             with tf.variable_scope("encoder"):
                 # shape:从 [batch_size, seq_length] 转成 [batch_size, seq_length, seq_length]
                 # 计算 attention scores 时使用
