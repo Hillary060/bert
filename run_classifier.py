@@ -433,7 +433,7 @@ class MyTaskProcessor(DataProcessor):
                 InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
         return examples
 
-
+# Input_example转化为Feature_example，再转换为TFRecord格式，便于Tensorflow处理
 def file_based_convert_examples_to_features(
         examples, label_list, max_seq_length, tokenizer, output_file):
     """Convert a set of `InputExample`s to a TFRecord file."""
@@ -658,7 +658,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
         is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
-        # 构建transformer模型 【最主要】！！！-----------------------------------------------------
+        """ [1] 构建transformer模型 【最主要】----------------------------------------------------- """
         (total_loss, per_example_loss, logits, probabilities) = create_model(
             bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
             num_labels, use_one_hot_embeddings)  # total loss: Float Tensor; the loss for this step
@@ -674,14 +674,14 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         """
         tvars = tf.trainable_variables()
         initialized_variable_names = {}  # 初始化参数，从初始化的checkpoint中获取
-        scaffold_fn = None  # todo Scaffold 是什么
+        scaffold_fn = None
         """
             scaffold_fn
             - 在CPU上运行，用来生成 Scaffold 的函数。
             - 该函数不应在 model_fn 中捕获任何张量。
         """
 
-        # 从checkpoint中获取参数，初始化模型
+        """ [2] 从checkpoint中获取参数，初始化模型 """
         if init_checkpoint:
             (assignment_map, initialized_variable_names
              ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
@@ -710,7 +710,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                 eval过程包含eval_metrics，测试评价指标
                 predict包含预测的结果概率
         """
-        """ 构造SPEC """
+        """ [3] 构造SPEC """
         output_spec = None
         if mode == tf.estimator.ModeKeys.TRAIN:
             """构造训练spec"""
@@ -935,7 +935,7 @@ def main(_):
     tf.logging.set_verbosity(tf.logging.INFO)
 
     processors = {
-        "cola": ColaProcessor,
+        "cola": ColaProcessor,  # task name： processor class
         "mnli": MnliProcessor,
         "mrpc": MrpcProcessor,
         "xnli": XnliProcessor,
@@ -998,6 +998,11 @@ def main(_):
             len(train_examples) / FLAGS.train_batch_size * FLAGS.num_train_epochs)
         num_warmup_steps = int(num_train_steps * FLAGS.warmup_proportion)
 
+    """ model_fn_builder
+        [1] 构建transformer模型
+        [2] 从checkpoint中获取参数，初始化模型
+        [3] 构造SPEC：根据train/eval/predict mode构建不同的SPEC
+    """
     model_fn = model_fn_builder(
         bert_config=bert_config,
         num_labels=len(label_list),
@@ -1020,12 +1025,16 @@ def main(_):
 
     if FLAGS.do_train:
         train_file = os.path.join(FLAGS.output_dir, "train.tf_record")
+        """ Input_example转化为Feature_example，再转换为TFRecord格式"""
         file_based_convert_examples_to_features(
             train_examples, label_list, FLAGS.max_seq_length, tokenizer, train_file)
         tf.logging.info("***** Running training *****")
         tf.logging.info("  Num examples = %d", len(train_examples))
         tf.logging.info("  Batch size = %d", FLAGS.train_batch_size)
         tf.logging.info("  Num steps = %d", num_train_steps)
+        """ 模型输入 
+                读取并解析tfrecord数据，把TFRecord的一条Record变成tf.Example对象
+        """
         train_input_fn = file_based_input_fn_builder(
             input_file=train_file,
             seq_length=FLAGS.max_seq_length,
@@ -1064,6 +1073,7 @@ def main(_):
             eval_steps = int(len(eval_examples) // FLAGS.eval_batch_size)
 
         eval_drop_remainder = True if FLAGS.use_tpu else False
+        # 把TFRecord的一条Record变成tf.Example对象
         eval_input_fn = file_based_input_fn_builder(
             input_file=eval_file,
             seq_length=FLAGS.max_seq_length,
